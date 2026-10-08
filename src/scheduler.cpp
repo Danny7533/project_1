@@ -56,10 +56,6 @@ void idlePolicy(CPUId_t core) {
         return;
     }
     switch (idleTicks[core]) {
-        case 2:
-            SetCState(core, C1);
-            coreCState[core] = C1;
-            break;
         case 4:
             SetCState(core, C2);
             coreCState[core] = C2;
@@ -81,6 +77,7 @@ void idlePolicy(CPUId_t core) {
     }
 }
 
+//Look for open cores starting at big cores
 void ascendScheduler(PState_t pState) {
     for (CPUId_t core = 0; core < NUM_CORES; core++) {
         if (coreRunning[core] != InvalidProcessId()) {
@@ -88,6 +85,7 @@ void ascendScheduler(PState_t pState) {
         }
         if (readyQ.empty())
             break;
+        //move core's cState to c1 and use
         if (coreCState[core]!=C1&&coreCState[core]!=C2||coreCStatePending[core]) {
             idleTicks[core]=0;
             if(!coreCStatePending[core]){
@@ -110,6 +108,7 @@ void ascendScheduler(PState_t pState) {
     }
 }
 
+//Look for open cores starting at small cores
 void descendScheduler(PState_t pState) {
     for (CPUId_t core = NUM_CORES - 1; core >= 0; core--) {
         if (core > 8)
@@ -145,6 +144,7 @@ void schedule() {
     if (readyQ.empty())
         return;
     int workload = readyQ.size() + coresRunning();
+    //dynamically select pState off workload
     PState_t pState = selectPState(workload);
     for (CPUId_t core = 0; core < NUM_CORES; core++) {
         if (coreRunning[core] != InvalidProcessId()) {
@@ -184,20 +184,8 @@ void ExitProcess(ProcessId_t pid) {
 }
 
 void TimerInterrupt(Time_t now) {
-    // You received a timer interrupt. This is where you want to execute scheduling decisions
-    
-    int cores_free = (int) NUM_CORES - (int)coresRunning();
-    int num_to_schedule = std::min((int) readyQ.size()-cores_free, (int) NUM_CORES);
-    for (CPUId_t core = 0; core < NUM_CORES && num_to_schedule > 0; core++) {
-        if (coreRunning[core] != InvalidProcessId()) {
-            SaveContext(coreRunning[core], core);
-            readyQ.push(coreRunning[core]);
-            coreRunning[core] = InvalidProcessId();
-        }
-        num_to_schedule--;
-        
-    }
     schedule();
+    //Enforces idle policy for cores
     for (CPUId_t core = 0; core < NUM_CORES; core++) {
         if (coreRunning[core] == InvalidProcessId()&&!coreCStatePending[core]) {
             idleTicks[core]++;
