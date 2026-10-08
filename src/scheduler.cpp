@@ -45,7 +45,10 @@ PState_t selectPState(int workload) {
         return P3;
     }
     return P4;
-    //some criteria to choose pState
+}
+
+bool ascendCores(int workload) {
+    return workload > NUM_CORES * 3;
 }
 
 void idlePolicy(CPUId_t core) {
@@ -54,44 +57,31 @@ void idlePolicy(CPUId_t core) {
     }
     switch (idleTicks[core]) {
         case 2:
-            // std::cout<<"set "<<core<<" "<<"C1\n";
             SetCState(core, C1);
             coreCState[core] = C1;
             break;
         case 4:
-            // std::cout<<"set "<<core<<" "<<"C2\n";
             SetCState(core, C2);
             coreCState[core] = C2;
             break;
         case 6:
-            // std::cout<<"set "<<core<<" "<<"C3\n";
             SetCState(core, C3);
             coreCState[core] = C3;
             break;
         case 8:
-            // std::cout<<"set "<<core<<" "<<"C4\n";
             SetCState(core, C4);
             coreCState[core] = C4;
             break;
         case 10:
-            // std::cout<<"set "<<core<<" "<<"C6\n";
             SetCState(core, C6);
             coreCState[core] = C6;
             break;
         default:
             break;
     }
-    //some criteria to chnage cState
 }
 
-void schedule() {
-    if (readyQ.empty())
-        return;
-    // for (CPUId_t core = 0; core < NUM_CORES; core++) {
-    //     std::cout << "idleTicks[" << core << "] = " << idleTicks[core] << "\n";
-    // }
-    int workload = readyQ.size() + coresRunning();
-    PState_t pState = selectPState(workload);
+void ascendScheduler(PState_t pState) {
     for (CPUId_t core = 0; core < NUM_CORES; core++) {
         if (coreRunning[core] != InvalidProcessId()) {
             continue;
@@ -101,41 +91,77 @@ void schedule() {
         if (coreCState[core]!=C1&&coreCState[core]!=C2||coreCStatePending[core]) {
             idleTicks[core]=0;
             if(!coreCStatePending[core]){
-                // std::cout<<"Wake up "<<core<<" from C"<<coreCState[core]<<"\n";
                 coreCState[core]=C1;
                 SetCState(core, C1);
                 coreCStatePending[core]=true;
             }
             continue;
         }
-        // std::cout<<"run "<<core<<"\n";
         if (!coreCStatePending[core]&&coreCState[core]!=C2) {
             ProcessId_t pid = readyQ.front();
             readyQ.pop();
             coreRunning[core] = pid;
             idleTicks[core] = 0;
             SetPState(core, pState);
-            // std::cout<<"run "<<core<<" with pid "<<coreRunning[core]<<"\n";
             LoadContext(coreRunning[core], core);
             RunCore(core);
+        }
+
+    }
+}
+
+void descendScheduler(PState_t pState) {
+    for (CPUId_t core = NUM_CORES - 1; core >= 0; core--) {
+        if (core > 8)
+            break;
+        if (coreRunning[core] == InvalidProcessId()) {
+            if (readyQ.empty())
+                break;
+            if (coreCState[core]!=C1&&coreCState[core]!=C2||coreCStatePending[core]) {
+                idleTicks[core]=0;
+                if(!coreCStatePending[core]){
+                    coreCState[core]=C1;
+                    SetCState(core, C1);
+                    coreCStatePending[core]=true;
+                }
+            }
+            if (!coreCStatePending[core]&&coreCState[core]!=C2) {
+                ProcessId_t pid = readyQ.front();
+                readyQ.pop();
+                coreRunning[core] = pid;
+                idleTicks[core] = 0;
+                SetPState(core, pState);
+                LoadContext(coreRunning[core], core);
+                RunCore(core);
+            }
+
         }
 
     }
 
 }
 
+void schedule() {
+    if (readyQ.empty())
+        return;
+    int workload = readyQ.size() + coresRunning();
+    PState_t pState = selectPState(workload);
+    for (CPUId_t core = 0; core < NUM_CORES; core++) {
+        if (coreRunning[core] != InvalidProcessId()) {
+            SetPState(core, pState);
+        }
+    }
+    
+    if (ascendCores(workload)) {
+        ascendScheduler(pState);
+    } else {
+        descendScheduler(pState);
+    }
+
+}
+
 
 void CreateProcess(ProcessId_t pid) {
-    // A new process has been created. Update the scheduler's data structures and decisions accordingly.
-    // SimOutput("CreateProcess(" + std::to_string(pid) + ")", 4);
-    // if(running == InvalidProcessId()) {
-    //     running = pid;
-    //     LoadContext(running, 4);
-    //     RunCore(4);
-    // }
-    // else {  // There is already a running process
-    //     readyQ.push(pid);
-    // }
     readyQ.push(pid);
     schedule();
 }
@@ -155,31 +181,10 @@ void ExitProcess(ProcessId_t pid) {
         ThrowException("A process that was not running is calling exit!!!");
     }
     schedule();
-
-    // if(running != pid) {
-    //     ThrowException("A process that was not running is calling exit!!!");
-    // }
-    // for (CPUId_t core = 0; core < NUM_CORES; core++) {
-    //     if (coreRunning[core] == pid) {
-    //         coreRunning[core] = InvalidProcessId();
-    //         break;
-    //     }
-    // }
-    // if(!readyQ.empty()){
-    //     running = readyQ.front();
-    //     readyQ.pop();
-    //     LoadContext(running, 4);
-    //     RunCore(4);
-    // }
-    // else {
-    //     running = InvalidProcessId();   // Nothing is running right now
-    // }
 }
 
 void TimerInterrupt(Time_t now) {
     // You received a timer interrupt. This is where you want to execute scheduling decisions
-    // if (readyQ.empty())       // Nothing to do if no processes are waiting
-    //     return;
     
     int cores_free = (int) NUM_CORES - (int)coresRunning();
     int num_to_schedule = std::min((int) readyQ.size()-cores_free, (int) NUM_CORES);
@@ -192,11 +197,6 @@ void TimerInterrupt(Time_t now) {
         num_to_schedule--;
         
     }
-    // for (CPUId_t core = 0; core < NUM_CORES; core++) {
-    //     if (coreRunning[core] == InvalidProcessId()) {
-    //         idlePolicy(core);
-    //     }
-    // }
     schedule();
     for (CPUId_t core = 0; core < NUM_CORES; core++) {
         if (coreRunning[core] == InvalidProcessId()&&!coreCStatePending[core]) {
@@ -204,46 +204,24 @@ void TimerInterrupt(Time_t now) {
             idlePolicy(core);
         }
     }
-    // bool allC6 = true;
-    // for (CPUId_t core = 0; core < NUM_CORES; core++) {
-    //     if (coreCState[core] != C6) {
-    //         allC6 = false;
-    //         break;
-    //     }
-    // }
-    // if (allC6) {
-    //     std::cout << "All cores are in C6, transitioning core 0 to C7" << std::endl;
-    //     SetCState(0, C7);
-    //     for (CPUId_t core = 0; core < NUM_CORES; core++) {
-    //         coreCState[core]=C7;
-    //     }
-    // }
-
-
-    // if(running == InvalidProcessId())       // Nothing to do
-    //     return;
-    // // adjust c-state and p-state potentially on workload
-    // // Someone was running
-    // if(readyQ.empty())                      // We have a running process but no other processes are waiting
-    //     return;
-    // //either maintain or up p-state if we keep hitting interrupt
-    // SaveContext(running, 4);
-    // readyQ.push(running);
-    // running = readyQ.front();
-    // readyQ.pop();
-    // LoadContext(running, 4);
-    // RunCore(4);
+    bool allC6 = true;
+    for (CPUId_t core = 0; core < NUM_CORES; core++) {
+        if (coreCState[core] != C6) {
+            allC6 = false;
+            break;
+        }
+    }
+    if (allC6) {
+        SetCState(0, C7);
+        for (CPUId_t core = 0; core < NUM_CORES; core++) {
+            coreCState[core]=C7;
+        }
+    }
 }
 
 void CStateTransitionComplete(CPUId_t core_id){
-    // std::cout<<"Awake "<<core_id<<"\n";
     coreCStatePending[core_id]=false;
     schedule();
-    // coreCStatePending[core_id] = false;
-    // if (coreRunning[core_id] == InvalidProcessId()) {
-    //     LoadContext(coreRunning[core_id], core_id);
-    //     RunCore(core_id);
-    // }
 }
 
 void SimulationComplete(Time_t now) {
